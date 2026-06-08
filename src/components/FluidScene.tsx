@@ -1,8 +1,6 @@
 import { useRef, useMemo } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { MeshDistortMaterial, Environment, ContactShadows, Float } from "@react-three/drei";
-import { EffectComposer, Bloom, DepthOfField, ChromaticAberration, Noise } from "@react-three/postprocessing";
-import { BlendFunction } from "postprocessing";
 import * as THREE from "three";
 
 function SwirlingNodes({ count = 25 }: { count?: number }) {
@@ -48,17 +46,23 @@ function SwirlingNodes({ count = 25 }: { count?: number }) {
     particles.forEach((p, i) => {
       // Dynamic rotation based on velocity
       p.angle += p.speed + (velocity.current * 0.05);
-      const x = Math.cos(p.angle) * p.orbitRadius;
-      const z = Math.sin(p.angle) * p.orbitRadius;
-      const y = p.yOffset + Math.sin(time + p.angle) * 0.5;
+      
+      // Expand orbit dynamically with scroll for a 3D dramatic push effect
+      const currentOrbit = p.orbitRadius + Math.abs(velocity.current) * 4;
+      
+      const x = Math.cos(p.angle) * currentOrbit;
+      const z = Math.sin(p.angle) * currentOrbit;
+      const y = p.yOffset + Math.sin(time + p.angle) * 1.5 + (velocity.current * 6); // Extra vertical sway
             
       dummy.position.set(x, y, z);
       
-      const stretch = 1 + Math.abs(velocity.current) * 0.5;
-      dummy.scale.set(p.scale, p.scale * stretch, p.scale);
+      // Cinematic scale pulse
+      const pulse = 1 + Math.sin(time * 2 + i) * 0.4;
+      const stretch = 1 + Math.abs(velocity.current) * 4;
+      dummy.scale.set(p.scale * pulse, p.scale * pulse * stretch, p.scale * pulse);
       
       // Orient rotation logic
-      dummy.quaternion.setFromAxisAngle(p.axis, time + velocity.current);
+      dummy.quaternion.setFromAxisAngle(p.axis, time * 2 + velocity.current);
       
       dummy.updateMatrix();
       meshRef.current!.setMatrixAt(i, dummy.matrix);
@@ -99,18 +103,26 @@ function DataDust({ count = 800 }: { count?: number }) {
     prevScroll.current = currScroll;
 
     particles.forEach((p, i) => {
-      // Move forward continuously
-      p.y += (p.speed * 2) + (velocity.current); // Float up like bubbles
+      // Move up like bubbles
+      p.y += (p.speed) + (velocity.current * 2);
+      
       // Loop back
       if (p.y > 30) p.y -= 60;
       if (p.y < -30) p.y += 60;
       
-      const wiggleX = Math.sin(time + i) * 0.05;
+      const wiggleX = Math.sin(time * 0.5 + i) * 0.1;
+      const wiggleZ = Math.cos(time * 0.5 + i) * 0.1;
       
-      dummy.position.set(p.x + wiggleX, p.y, p.z);
-      // Stretch on Y based on velocity
-      const stretch = 1 + Math.abs(velocity.current) * 2;
+      dummy.position.set(p.x + wiggleX, p.y, p.z + wiggleZ);
+      
+      // Stretch on Y based on scroll velocity for cinematic motion blur feel
+      const stretch = 1 + Math.abs(velocity.current) * 8;
       dummy.scale.set(p.scale, p.scale * stretch, p.scale);
+      
+      // Rotation based on movement to add realism
+      dummy.rotation.x = time * p.speed * 10;
+      dummy.rotation.y = time * p.speed * 10;
+      
       dummy.updateMatrix();
       meshRef.current!.setMatrixAt(i, dummy.matrix);
     });
@@ -135,17 +147,17 @@ function LiquidGlassCore() {
 
   const waypoints = useMemo(() => [
     // Scene 01: The Invisible Layer (Center, smaller core)
-    { x: 0, y: 0, scale: baseScale * 0.9, color: new THREE.Color("#d0e3f5"), distort: 0.2 }, 
+    { x: 0, y: 0, scale: baseScale * 0.9, color: new THREE.Color("#e0eaf5"), distort: 0.2 }, 
     // Scene 02: What is Changing (Text on right, fluid on left)
-    { x: isSmall ? 0 : -viewport.width * 0.25, y: 0, scale: baseScale * 0.8, color: new THREE.Color("#abccee"), distort: 0.15 }, 
+    { x: isSmall ? 0 : -viewport.width * 0.25, y: 0, scale: baseScale * 0.8, color: new THREE.Color("#d0e3f5"), distort: 0.15 }, 
     // Scene 03: Matrix Core (Text on left, fluid on right)
-    { x: isSmall ? 0 : viewport.width * 0.25, y: isSmall ? -viewport.height * 0.05 : 0, scale: baseScale * 1.5, color: new THREE.Color("#7db4e6"), distort: 0.3 }, 
-    // Scene 04: Hydrophobic Collector (Text on right, fluid on left, Amber color)
-    { x: isSmall ? 0 : -viewport.width * 0.25, y: isSmall ? viewport.height * 0.1 : 0, scale: baseScale * 1.4, color: new THREE.Color("#dca826"), distort: 0.6 },
+    { x: isSmall ? 0 : viewport.width * 0.25, y: isSmall ? -viewport.height * 0.05 : 0, scale: baseScale * 1.5, color: new THREE.Color("#bde0fe"), distort: 0.3 }, 
+    // Scene 04: X Series (Text on right, fluid on left, clear/blue color)
+    { x: isSmall ? 0 : -viewport.width * 0.25, y: isSmall ? viewport.height * 0.1 : 0, scale: baseScale * 1.4, color: new THREE.Color("#a2d2ff"), distort: 0.25 },
     // Scene 05: Efficiency Proof (Text centered, fluid centered)
-    { x: 0, y: 0, scale: baseScale * 1.2, color: new THREE.Color("#abccee"), distort: 0.2 },
+    { x: 0, y: 0, scale: baseScale * 1.2, color: new THREE.Color("#d0e3f5"), distort: 0.2 },
     // Scene 06: CTA Background (Engulfing camera for initialization)
-    { x: 0, y: 0, scale: baseScale * 5.5, color: new THREE.Color("#d0e3f5"), distort: 0.2 }, 
+    { x: 0, y: 0, scale: baseScale * 5.5, color: new THREE.Color("#e0eaf5"), distort: 0.2 }, 
   ], [viewport, isSmall, baseScale]);
 
   const prevScroll = useRef(0);
@@ -208,40 +220,55 @@ function LiquidGlassCore() {
 
   return (
     <group ref={groupRef}>
-      <Float speed={2} rotationIntensity={0.5} floatIntensity={2} floatingRange={[-0.2, 0.2]}>
+      <Float speed={1.5} rotationIntensity={1} floatIntensity={1} floatingRange={[-0.1, 0.1]}>
         <mesh castShadow receiveShadow>
-          <sphereGeometry args={[1.8, 64, 64]} />
+          <sphereGeometry args={[1.8, 128, 128]} />
           <MeshDistortMaterial
             ref={materialRef}
             color="#ffffff"
-            envMapIntensity={2.0}
-            clearcoat={1}
-            clearcoatRoughness={0}
-            metalness={0.1}
-            roughness={0}
-            transmission={0.98}
-            ior={1.33}
-            thickness={2.5}
+            envMapIntensity={3.5}
+            clearcoat={1.0}
+            clearcoatRoughness={0.0}
+            metalness={0.05}
+            roughness={0.0}
+            transmission={1.0}
+            ior={1.333} // Exact IOR of water
+            thickness={4.5}
             distort={0.4}
-            speed={1.5}
+            speed={2}
           />
         </mesh>
       </Float>
-      <SwirlingNodes count={20} />
+      <SwirlingNodes count={45} />
     </group>
   );
+}
+
+function CameraRig() {
+  const { camera, mouse } = useThree();
+  useFrame(() => {
+    // Cinematic camera sway based on mouse position
+    camera.position.x = THREE.MathUtils.lerp(camera.position.x, mouse.x * 1.5, 0.02);
+    camera.position.y = THREE.MathUtils.lerp(camera.position.y, mouse.y * 1.5, 0.02);
+    // Slight roll
+    camera.rotation.z = THREE.MathUtils.lerp(camera.rotation.z, -mouse.x * 0.05, 0.02);
+  });
+  return null;
 }
 
 export default function FluidScene() {
   return (
     <>
+      <CameraRig />
       <Environment preset="city" />
-      <ambientLight intensity={1.5} />
-      <directionalLight position={[10, 15, 10]} intensity={2.5} color="#ffffff" />
-      <directionalLight position={[-10, 5, -5]} intensity={1.5} color="#e0eaf5" />
-      <spotLight position={[0, 10, 10]} intensity={1.2} color="#ffffff" penumbra={1} />
+      <ambientLight intensity={0.5} />
+      {/* Cinematic underwater lighting setup */}
+      <directionalLight position={[10, 15, 10]} intensity={3} color="#ffffff" castShadow />
+      <directionalLight position={[-10, -5, -5]} intensity={2} color="#4488ff" />
+      <spotLight position={[0, 10, 10]} intensity={2.5} color="#a2d2ff" penumbra={0.8} angle={0.5} />
+      <pointLight position={[0, -10, 0]} intensity={1.5} color="#0055ff" />
       
-      <DataDust count={1500} />
+      <DataDust count={2000} />
       <LiquidGlassCore />
       
       <ContactShadows 
@@ -253,12 +280,6 @@ export default function FluidScene() {
          color="#000000" 
          resolution={256}
       />
-      <EffectComposer disableNormalPass multisampling={4}>
-         <DepthOfField focusDistance={0} focalLength={0.02} bokehScale={2} height={480} />
-         <Bloom luminanceThreshold={1} mipmapBlur intensity={0.5} />
-         <ChromaticAberration blendFunction={BlendFunction.NORMAL} offset={new THREE.Vector2(0.002, 0.002)} />
-         <Noise opacity={0.05} />
-      </EffectComposer>
     </>
   );
 }
