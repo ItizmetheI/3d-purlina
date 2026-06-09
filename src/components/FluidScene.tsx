@@ -1,69 +1,65 @@
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, forwardRef, useImperativeHandle } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
-import { MeshDistortMaterial, Environment, ContactShadows, Float } from "@react-three/drei";
+import { MeshTransmissionMaterial, Environment, Float } from "@react-three/drei";
 import * as THREE from "three";
 
-function SwirlingNodes({ count = 25 }: { count?: number }) {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-  const matRef = useRef<THREE.MeshPhysicalMaterial>(null);
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-  
-  const particles = useMemo(() => {
-    return new Array(count).fill(0).map(() => ({
-      orbitRadius: 2.5 + Math.random() * 4.5,
-      speed: 0.002 + Math.random() * 0.008,
-      yOffset: (Math.random() - 0.5) * 6,
-      angle: Math.random() * Math.PI * 2,
-      scale: 0.05 + Math.random() * 0.15,
-      axis: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize()
-    }));
-  }, [count]);
+// ─── Types ────────────────────────────────────────────────────────────────────
+export interface FluidSceneHandle {
+  setScene: (scene: number, progress: number) => void;
+}
 
-  const prevScroll = useRef(0);
-  const velocity = useRef(0);
-  
-  const colorBlue = useMemo(() => new THREE.Color("#7db4e6"), []);
-  const colorAmber = useMemo(() => new THREE.Color("#dca826"), []);
+// ─── Scene configs ────────────────────────────────────────────────────────────
+const SCENES = [
+  // 0: Hero — white world, small centered blob
+  { blobX: 0,    blobY: 0,   blobScale: 1.1,  blobColor: "#d0d8e8", envIntensity: 1.2, transmission: 0.98, thickness: 3,   ior: 1.35, chrAb: 0.04 },
+  // 1: Problem — blob drifts left, grows
+  { blobX: -3.5, blobY: 0,   blobScale: 1.4,  blobColor: "#c5d5ee", envIntensity: 1.5, transmission: 0.95, thickness: 4,   ior: 1.38, chrAb: 0.06 },
+  // 2: Solution — blob right, large
+  { blobX: 3.5,  blobY: 0,   blobScale: 1.8,  blobColor: "#a8c4e8", envIntensity: 2.0, transmission: 0.92, thickness: 5,   ior: 1.42, chrAb: 0.08 },
+  // 3: Collector — amber phase, center
+  { blobX: 0,    blobY: 0,   blobScale: 2.0,  blobColor: "#c8860a", envIntensity: 2.5, transmission: 0.88, thickness: 6,   ior: 1.45, chrAb: 0.10 },
+  // 4: Data — blob right, medium
+  { blobX: 3.0,  blobY: 0,   blobScale: 1.5,  blobColor: "#8899bb", envIntensity: 1.8, transmission: 0.93, thickness: 4.5, ior: 1.40, chrAb: 0.07 },
+  // 5: CTA — blob expands to fill, camera engulf
+  { blobX: 0,    blobY: 0,   blobScale: 9.0,  blobColor: "#111111", envIntensity: 3.0, transmission: 0.85, thickness: 8,   ior: 1.50, chrAb: 0.12 },
+];
+
+// ─── Particle Field ───────────────────────────────────────────────────────────
+function ParticleField({ scene }: { scene: React.MutableRefObject<number> }) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const count = 200; // REDUCED FROM 600 FOR WEBGL CONTEXT PERFORMANCE
+
+  const pts = useMemo(() => Array.from({ length: count }, () => ({
+    x: (Math.random() - 0.5) * 50,
+    y: (Math.random() - 0.5) * 50,
+    z: (Math.random() - 0.5) * 40,
+    vy: 0.003 + Math.random() * 0.008,
+    s: 0.006 + Math.random() * 0.016,
+    ph: Math.random() * Math.PI * 2,
+  })), []);
+
+  const matRef = useRef<THREE.MeshBasicMaterial>(null);
 
   useFrame((state) => {
-    if (!meshRef.current) return;
-    const time = state.clock.getElapsedTime();
-    
-    // Smooth scroll velocity
-    const scrollable = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-    const progress = Math.min(Math.max((window.scrollY / scrollable), 0), 1);
-    
-    const currScroll = window.scrollY;
-    velocity.current = THREE.MathUtils.lerp(velocity.current, (currScroll - prevScroll.current) * 0.004, 0.05);
-    prevScroll.current = currScroll;
+    if (!meshRef.current || !matRef.current) return;
+    const t = state.clock.getElapsedTime();
+    const sc = scene.current;
 
-    // Transition particle color based on progress (Amber in section 4)
-    if (matRef.current) {
-        const targetColor = progress > 0.55 && progress < 0.75 ? colorAmber : colorBlue;
-        matRef.current.color.lerp(targetColor, 0.05);
-    }
+    // Color: white in scenes 0-2, amber in scene 3, fade dark in 4-5
+    const targetOpacity = sc <= 2 ? 0.18 : sc === 3 ? 0.3 : 0.08;
+    matRef.current.opacity = THREE.MathUtils.lerp(matRef.current.opacity, targetOpacity, 0.04);
 
-    particles.forEach((p, i) => {
-      // Dynamic rotation based on velocity
-      p.angle += p.speed + (velocity.current * 0.05);
-      
-      // Expand orbit dynamically with scroll for a 3D dramatic push effect
-      const currentOrbit = p.orbitRadius + Math.abs(velocity.current) * 4;
-      
-      const x = Math.cos(p.angle) * currentOrbit;
-      const z = Math.sin(p.angle) * currentOrbit;
-      const y = p.yOffset + Math.sin(time + p.angle) * 1.5 + (velocity.current * 6); // Extra vertical sway
-            
-      dummy.position.set(x, y, z);
-      
-      // Cinematic scale pulse
-      const pulse = 1 + Math.sin(time * 2 + i) * 0.4;
-      const stretch = 1 + Math.abs(velocity.current) * 4;
-      dummy.scale.set(p.scale * pulse, p.scale * pulse * stretch, p.scale * pulse);
-      
-      // Orient rotation logic
-      dummy.quaternion.setFromAxisAngle(p.axis, time * 2 + velocity.current);
-      
+    pts.forEach((p, i) => {
+      p.y += p.vy * (1 + sc * 0.15);
+      if (p.y > 25) p.y -= 50;
+      dummy.position.set(
+        p.x + Math.sin(t * 0.3 + p.ph) * 0.2,
+        p.y,
+        p.z + Math.cos(t * 0.3 + p.ph) * 0.2
+      );
+      const stretch = 1 + Math.abs(Math.sin(t + p.ph)) * 0.3;
+      dummy.scale.set(p.s, p.s * stretch, p.s);
       dummy.updateMatrix();
       meshRef.current!.setMatrixAt(i, dummy.matrix);
     });
@@ -72,214 +68,217 @@ function SwirlingNodes({ count = 25 }: { count?: number }) {
 
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, count]}>
-      <sphereGeometry args={[1, 32, 32]} />
-      <meshPhysicalMaterial ref={matRef} color="#7db4e6" envMapIntensity={1.5} clearcoat={1} clearcoatRoughness={0} roughness={0} metalness={0.1} transmission={0.95} ior={1.33} thickness={1.5} />
+      <sphereGeometry args={[1, 6, 6]} />
+      <meshBasicMaterial ref={matRef} color="#aabbcc" transparent opacity={0.18} depthWrite={false} />
     </instancedMesh>
   );
 }
 
-function DataDust({ count = 800 }: { count?: number }) {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-  
-  const particles = useMemo(() => {
-    return new Array(count).fill(0).map(() => ({
-      x: (Math.random() - 0.5) * 60,
-      y: (Math.random() - 0.5) * 60,
-      z: (Math.random() - 0.5) * 60,
-      speed: Math.random() * 0.015 + 0.002,
-      scale: Math.random() * 0.02 + 0.005
-    }));
-  }, [count]);
-
-  const prevScroll = useRef(0);
-  const velocity = useRef(0);
-
-  useFrame((state) => {
-    if (!meshRef.current) return;
-    const time = state.clock.getElapsedTime();
-    const currScroll = window.scrollY;
-    velocity.current = THREE.MathUtils.lerp(velocity.current, (currScroll - prevScroll.current) * 0.01, 0.05);
-    prevScroll.current = currScroll;
-
-    particles.forEach((p, i) => {
-      // Move up like bubbles
-      p.y += (p.speed) + (velocity.current * 2);
-      
-      // Loop back
-      if (p.y > 30) p.y -= 60;
-      if (p.y < -30) p.y += 60;
-      
-      const wiggleX = Math.sin(time * 0.5 + i) * 0.1;
-      const wiggleZ = Math.cos(time * 0.5 + i) * 0.1;
-      
-      dummy.position.set(p.x + wiggleX, p.y, p.z + wiggleZ);
-      
-      // Stretch on Y based on scroll velocity for cinematic motion blur feel
-      const stretch = 1 + Math.abs(velocity.current) * 8;
-      dummy.scale.set(p.scale, p.scale * stretch, p.scale);
-      
-      // Rotation based on movement to add realism
-      dummy.rotation.x = time * p.speed * 10;
-      dummy.rotation.y = time * p.speed * 10;
-      
-      dummy.updateMatrix();
-      meshRef.current!.setMatrixAt(i, dummy.matrix);
-    });
-    meshRef.current.instanceMatrix.needsUpdate = true;
-  });
-
-  return (
-    <instancedMesh ref={meshRef} args={[undefined, undefined, count]}>
-      <sphereGeometry args={[1, 16, 16]} />
-      <meshPhysicalMaterial color="#ffffff" transmission={0.9} roughness={0} ior={1.33} thickness={0.5} clearcoat={1} depthWrite={false} transparent opacity={0.6} />
-    </instancedMesh>
-  );
-}
-
-function LiquidGlassCore() {
+// ─── Core Blob ────────────────────────────────────────────────────────────────
+function LiquidBlob({
+  currentScene,
+  sceneProgress,
+}: {
+  currentScene: React.MutableRefObject<number>;
+  sceneProgress: React.MutableRefObject<number>;
+}) {
   const groupRef = useRef<THREE.Group>(null);
-  const materialRef = useRef<any>(null);
+  const matRef   = useRef<any>(null);
   const { viewport } = useThree();
-  const isSmall = viewport.width < 6;
 
-  const baseScale = isSmall ? 0.8 : 1.3;
-
-  const waypoints = useMemo(() => [
-    // Scene 01: The Invisible Layer (Center, smaller core)
-    { x: 0, y: 0, scale: baseScale * 0.9, color: new THREE.Color("#e0eaf5"), distort: 0.2 }, 
-    // Scene 02: What is Changing (Text on right, fluid on left)
-    { x: isSmall ? 0 : -viewport.width * 0.25, y: 0, scale: baseScale * 0.8, color: new THREE.Color("#d0e3f5"), distort: 0.15 }, 
-    // Scene 03: Matrix Core (Text on left, fluid on right)
-    { x: isSmall ? 0 : viewport.width * 0.25, y: isSmall ? -viewport.height * 0.05 : 0, scale: baseScale * 1.5, color: new THREE.Color("#bde0fe"), distort: 0.3 }, 
-    // Scene 04: X Series (Text on right, fluid on left, clear/blue color)
-    { x: isSmall ? 0 : -viewport.width * 0.25, y: isSmall ? viewport.height * 0.1 : 0, scale: baseScale * 1.4, color: new THREE.Color("#a2d2ff"), distort: 0.25 },
-    // Scene 05: Efficiency Proof (Text centered, fluid centered)
-    { x: 0, y: 0, scale: baseScale * 1.2, color: new THREE.Color("#d0e3f5"), distort: 0.2 },
-    // Scene 06: CTA Background (Engulfing camera for initialization)
-    { x: 0, y: 0, scale: baseScale * 5.5, color: new THREE.Color("#e0eaf5"), distort: 0.2 }, 
-  ], [viewport, isSmall, baseScale]);
-
-  const prevScroll = useRef(0);
-  const velocity = useRef(0);
-  const smoothPointer = useRef(new THREE.Vector2());
-  const interpolatedColor = useRef(new THREE.Color());
+  const lerpColor = useRef(new THREE.Color(SCENES[0].blobColor));
+  const prevVel   = useRef(0);
+  const smoothPtr = useRef(new THREE.Vector2());
+  const prevY     = useRef(window.scrollY);
 
   useFrame((state) => {
-    const scrollable = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-    const progress = Math.min(Math.max((window.scrollY / scrollable), 0), 1);
-    
-    const currScroll = window.scrollY;
-    velocity.current = THREE.MathUtils.lerp(velocity.current, (currScroll - prevScroll.current) * 0.002, 0.05);
-    prevScroll.current = currScroll;
+    if (!groupRef.current || !matRef.current) return;
+    const t = state.clock.getElapsedTime();
 
-    // Fluid mouse follow
-    smoothPointer.current.lerp(state.pointer, 0.05);
+    // Velocity
+    const cy = window.scrollY;
+    prevVel.current = THREE.MathUtils.lerp(prevVel.current, (cy - prevY.current) * 0.002, 0.08);
+    prevY.current = cy;
 
-    const segment = progress * (waypoints.length - 1); 
-    const index = Math.floor(segment);
-    const t = segment - index;
-    const easeT = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // Smoothstep
-    
-    const p0 = waypoints[Math.min(index, waypoints.length - 1)];
-    const p1 = waypoints[Math.min(index + 1, waypoints.length - 1)];
+    smoothPtr.current.lerp(state.pointer, 0.05);
 
-    if (!groupRef.current) return;
-    
-    const targetX = THREE.MathUtils.lerp(p0.x, p1.x, easeT);
-    const targetY = THREE.MathUtils.lerp(p0.y, p1.y, easeT);
-    const targetScale = THREE.MathUtils.lerp(p0.scale, p1.scale, easeT);
-    const targetDistort = THREE.MathUtils.lerp(p0.distort, p1.distort, easeT);
-    interpolatedColor.current.lerpColors(p0.color, p1.color, easeT);
-    
-    // Parallax & Interpolation
-    groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, targetX + (smoothPointer.current.x * 2), 0.05);
-    groupRef.current.position.y = THREE.MathUtils.lerp(groupRef.current.position.y, targetY + (smoothPointer.current.y * 2), 0.05);
-    
-    // Apply stretch on scroll velocity
-    const velStretchY = 1 + Math.abs(velocity.current) * 0.4;
-    groupRef.current.scale.set(
-       THREE.MathUtils.lerp(groupRef.current.scale.x, targetScale, 0.08),
-       THREE.MathUtils.lerp(groupRef.current.scale.y, targetScale * velStretchY, 0.08),
-       THREE.MathUtils.lerp(groupRef.current.scale.z, targetScale, 0.08)
+    // Scene interpolation
+    const sc = Math.min(Math.floor(currentScene.current), SCENES.length - 2);
+    const prog = sceneProgress.current;
+    const ease = prog < 0.5 ? 2 * prog * prog : -1 + (4 - 2 * prog) * prog;
+
+    const A = SCENES[sc];
+    const B = SCENES[Math.min(sc + 1, SCENES.length - 1)];
+
+    const tx = THREE.MathUtils.lerp(A.blobX, B.blobX, ease);
+    const ty = THREE.MathUtils.lerp(A.blobY, B.blobY, ease);
+    const ts = THREE.MathUtils.lerp(A.blobScale, B.blobScale, ease);
+
+    lerpColor.current.lerpColors(
+      new THREE.Color(A.blobColor),
+      new THREE.Color(B.blobColor),
+      ease
     );
-    
-    // Rotations based on mouse and time
-    const time = state.clock.getElapsedTime();
-    groupRef.current.rotation.x = Math.sin(time * 0.2) * 0.2 + (smoothPointer.current.y * -0.5);
-    groupRef.current.rotation.y = time * 0.1 + (smoothPointer.current.x * 0.5) + (progress * Math.PI);
-    
-    if (materialRef.current) {
-         // Subtle distortion that increases when scrolling
-         const velDistort = Math.min(Math.abs(velocity.current) * 1.5, 0.8);
-         materialRef.current.distort = THREE.MathUtils.lerp(materialRef.current.distort, targetDistort + velDistort + (Math.sin(time) * 0.05), 0.05);
-         materialRef.current.speed = THREE.MathUtils.lerp(materialRef.current.speed, 2 + Math.abs(velocity.current) * 4, 0.05);
-         materialRef.current.color.copy(interpolatedColor.current);
-    }
+
+    // Position
+    groupRef.current.position.x = THREE.MathUtils.lerp(
+      groupRef.current.position.x,
+      tx + smoothPtr.current.x * 1.8,
+      0.055
+    );
+    groupRef.current.position.y = THREE.MathUtils.lerp(
+      groupRef.current.position.y,
+      ty + smoothPtr.current.y * 1.8,
+      0.055
+    );
+
+    // Scale with velocity stretch
+    const velS = 1 + Math.abs(prevVel.current) * 0.7;
+    groupRef.current.scale.set(
+      THREE.MathUtils.lerp(groupRef.current.scale.x, ts, 0.07),
+      THREE.MathUtils.lerp(groupRef.current.scale.y, ts * velS, 0.07),
+      THREE.MathUtils.lerp(groupRef.current.scale.z, ts, 0.07)
+    );
+
+    // Rotation
+    groupRef.current.rotation.y = t * 0.09 + smoothPtr.current.x * 0.5 + sc * 0.4;
+    groupRef.current.rotation.x = Math.sin(t * 0.18) * 0.18 + smoothPtr.current.y * -0.35;
+    groupRef.current.rotation.z = Math.sin(t * 0.12) * 0.06;
+
+    // Material
+    const tIor          = THREE.MathUtils.lerp(A.ior, B.ior, ease);
+    const tThick        = THREE.MathUtils.lerp(A.thickness, B.thickness, ease);
+    const tTrans        = THREE.MathUtils.lerp(A.transmission, B.transmission, ease);
+    const tChrAb        = THREE.MathUtils.lerp(A.chrAb, B.chrAb, ease);
+    const velDistort    = Math.min(Math.abs(prevVel.current) * 2.5, 0.6);
+
+    matRef.current.color.copy(lerpColor.current);
+    matRef.current.ior              = tIor;
+    matRef.current.thickness        = tThick;
+    matRef.current.transmission     = tTrans;
+    matRef.current.chromaticAberration = tChrAb;
+    matRef.current.distortionScale  = THREE.MathUtils.lerp(
+      matRef.current.distortionScale ?? 0.2,
+      0.15 + velDistort + Math.sin(t * 0.6) * 0.04,
+      0.06
+    );
   });
 
   return (
     <group ref={groupRef}>
-      <Float speed={1.5} rotationIntensity={1} floatIntensity={1} floatingRange={[-0.1, 0.1]}>
-        <mesh castShadow receiveShadow>
-          <sphereGeometry args={[1.8, 128, 128]} />
-          <MeshDistortMaterial
-            ref={materialRef}
-            color="#ffffff"
-            envMapIntensity={3.5}
+      <Float speed={1.0} rotationIntensity={0.5} floatIntensity={0.6} floatingRange={[-0.06, 0.06]}>
+        <mesh castShadow>
+          <sphereGeometry args={[1.8, 64, 64]} />
+          <MeshTransmissionMaterial
+            ref={matRef}
+            color={SCENES[0].blobColor}
+            background={new THREE.Color("#ffffff")}
+            transmission={0.98}
+            thickness={3}
+            roughness={0.0}
+            ior={1.35}
+            chromaticAberration={0.04}
+            anisotropy={0.1}
+            distortion={0.25}
+            distortionScale={0.2}
+            temporalDistortion={0.22}
+            envMapIntensity={2.0}
             clearcoat={1.0}
             clearcoatRoughness={0.0}
-            metalness={0.05}
-            roughness={0.0}
-            transmission={1.0}
-            ior={1.333} // Exact IOR of water
-            thickness={4.5}
-            distort={0.4}
-            speed={2}
+            attenuationDistance={3.0}
+            attenuationColor="#d0d8f0"
+            resolution={512}
+            samples={4}
           />
         </mesh>
       </Float>
-      <SwirlingNodes count={45} />
     </group>
   );
 }
 
-function CameraRig() {
+// ─── Camera ───────────────────────────────────────────────────────────────────
+function Camera({ currentScene }: { currentScene: React.MutableRefObject<number> }) {
   const { camera, mouse } = useThree();
+  const targetZ = useRef(14);
+
   useFrame(() => {
-    // Cinematic camera sway based on mouse position
-    camera.position.x = THREE.MathUtils.lerp(camera.position.x, mouse.x * 1.5, 0.02);
-    camera.position.y = THREE.MathUtils.lerp(camera.position.y, mouse.y * 1.5, 0.02);
-    // Slight roll
-    camera.rotation.z = THREE.MathUtils.lerp(camera.rotation.z, -mouse.x * 0.05, 0.02);
+    // Push camera closer in final scene (engulf effect)
+    const sc = currentScene.current;
+    targetZ.current = sc >= 4.5 ? THREE.MathUtils.lerp(targetZ.current, 5, 0.04) : THREE.MathUtils.lerp(targetZ.current, 14, 0.04);
+
+    camera.position.x   = THREE.MathUtils.lerp(camera.position.x,   mouse.x * 1.5, 0.025);
+    camera.position.y   = THREE.MathUtils.lerp(camera.position.y,   mouse.y * 1.5, 0.025);
+    camera.position.z   = THREE.MathUtils.lerp(camera.position.z,   targetZ.current, 0.04);
+    camera.rotation.z   = THREE.MathUtils.lerp(camera.rotation.z, -mouse.x * 0.04, 0.025);
   });
   return null;
 }
 
-export default function FluidScene() {
+// ─── Background plane (world color) ──────────────────────────────────────────
+function WorldBackground({ currentScene, sceneProgress }: {
+  currentScene: React.MutableRefObject<number>;
+  sceneProgress: React.MutableRefObject<number>;
+}) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const matRef  = useRef<THREE.MeshBasicMaterial>(null);
+
+  // World background colors per scene
+  const bgColors = useMemo(() => [
+    new THREE.Color("#ffffff"), // scene 0 — white
+    new THREE.Color("#f2f2f5"), // scene 1 — near white
+    new THREE.Color("#e8e8ef"), // scene 2 — light grey
+    new THREE.Color("#0d0d10"), // scene 3 — near black (amber scene)
+    new THREE.Color("#111118"), // scene 4 — dark
+    new THREE.Color("#000000"), // scene 5 — black
+  ], []);
+
+  const lerpBg = useRef(new THREE.Color("#ffffff"));
+
+  useFrame(() => {
+    if (!matRef.current) return;
+    const sc   = Math.min(Math.floor(currentScene.current), bgColors.length - 2);
+    const prog = sceneProgress.current;
+    const ease = prog < 0.5 ? 2 * prog * prog : -1 + (4 - 2 * prog) * prog;
+    lerpBg.current.lerpColors(bgColors[sc], bgColors[Math.min(sc + 1, bgColors.length - 1)], ease);
+    matRef.current.color.copy(lerpBg.current);
+  });
+
+  const { viewport } = useThree();
   return (
-    <>
-      <CameraRig />
-      <Environment preset="city" />
-      <ambientLight intensity={0.5} />
-      {/* Cinematic underwater lighting setup */}
-      <directionalLight position={[10, 15, 10]} intensity={3} color="#ffffff" castShadow />
-      <directionalLight position={[-10, -5, -5]} intensity={2} color="#4488ff" />
-      <spotLight position={[0, 10, 10]} intensity={2.5} color="#a2d2ff" penumbra={0.8} angle={0.5} />
-      <pointLight position={[0, -10, 0]} intensity={1.5} color="#0055ff" />
-      
-      <DataDust count={2000} />
-      <LiquidGlassCore />
-      
-      <ContactShadows 
-         position={[0, -4, 0]} 
-         opacity={0.3} 
-         scale={25} 
-         blur={2} 
-         far={10} 
-         color="#000000" 
-         resolution={256}
-      />
-    </>
+    <mesh ref={meshRef} position={[0, 0, -20]}>
+      <planeGeometry args={[viewport.width * 6, viewport.height * 6]} />
+      <meshBasicMaterial ref={matRef} color="#ffffff" />
+    </mesh>
   );
 }
+
+// ─── Export ───────────────────────────────────────────────────────────────────
+const FluidScene = forwardRef<FluidSceneHandle, {
+  currentScene: React.MutableRefObject<number>;
+  sceneProgress: React.MutableRefObject<number>;
+}>(({ currentScene, sceneProgress }, ref) => {
+  useImperativeHandle(ref, () => ({
+    setScene: (scene: number, progress: number) => {
+      currentScene.current = scene;
+      sceneProgress.current = progress;
+    },
+  }));
+
+  return (
+    <>
+      <Camera currentScene={currentScene} />
+      <Environment preset="studio" />
+      <ambientLight intensity={0.6} color="#e8eef8" />
+      <directionalLight position={[10, 15, 10]} intensity={3.5} color="#ffffff" castShadow />
+      <directionalLight position={[-8, -4, -8]} intensity={2.0} color="#aabbdd" />
+      <spotLight position={[0, 10, 8]} intensity={4} color="#ffffff" penumbra={0.9} angle={0.4} />
+      <pointLight position={[6, -6, 6]} intensity={2} color="#c8d8f0" />
+      <WorldBackground currentScene={currentScene} sceneProgress={sceneProgress} />
+      <ParticleField scene={currentScene} />
+      <LiquidBlob currentScene={currentScene} sceneProgress={sceneProgress} />
+    </>
+  );
+});
+
+FluidScene.displayName = "FluidScene";
+export default FluidScene;

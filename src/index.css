@@ -1,17 +1,90 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Editorial+New:ital,wght@0,200;0,400;1,200;1,400&family=Inter:wght@200;300;400;500&display=swap');
 @import "tailwindcss";
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --font-display: "Bebas Neue", sans-serif;
+  --font-serif: "Georgia", serif;
 }
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: auto; }
 
 body {
-  background-color: #f7f7fa;
+  background: #ffffff;
   color: #111111;
+  overflow-x: hidden;
+  cursor: none;
 }
 
-::-webkit-scrollbar {
-  width: 0px;
-  background: transparent;
+::-webkit-scrollbar { display: none; }
+
+/* Grain */
+.grain::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 9998;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
 }
+
+/* Scene containers */
+.scene-panel {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* Text split chars */
+.char {
+  display: inline-block;
+  overflow: hidden;
+}
+.char-inner {
+  display: inline-block;
+  transform: translateY(110%);
+}
+
+/* Clip reveal */
+.clip-reveal {
+  overflow: hidden;
+}
+.clip-inner {
+  transform: translateY(100%);
+  display: block;
+}
+
+/* Scene number */
+.scene-num {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: clamp(7rem, 18vw, 16rem);
+  line-height: 0.85;
+  letter-spacing: -0.02em;
+  color: transparent;
+  -webkit-text-stroke: 1px currentColor;
+  opacity: 0.06;
+  pointer-events: none;
+  user-select: none;
+  position: absolute;
+}
+
+/* Noise animated */
+@keyframes grain-anim {
+  0%, 100% { transform: translate(0,0); }
+  20% { transform: translate(-2%,-2%); }
+  40% { transform: translate(2%,1%); }
+  60% { transform: translate(-1%,3%); }
+  80% { transform: translate(3%,-1%); }
+}
+
+.grain::before { animation: grain-anim 0.4s steps(1) infinite; }

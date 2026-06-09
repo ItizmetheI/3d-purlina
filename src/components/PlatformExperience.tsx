@@ -1,499 +1,591 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Lenis from "lenis";
 import { Canvas } from "@react-three/fiber";
-import { motion, useScroll, useTransform, useMotionValue } from "motion/react";
-import FluidScene from "./FluidScene";
+import { motion, AnimatePresence } from "motion/react";
+import FluidScene, { FluidSceneHandle } from "./FluidScene";
 import Magnetic from "./Magnetic";
-import { ArrowUpRight, Activity, Zap, Layers, Shield } from "lucide-react";
+import { ArrowUpRight, Search } from "lucide-react";
 
-// ─── Custom Cursor ────────────────────────────────────────────────────────────
-function CustomCursor() {
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
-  const [isHovering, setIsHovering] = useState(false);
+// ─── Constants ────────────────────────────────────────────────────────────────
+const SCENES = [
+  { id: "01", label: "The Invisible Layer" },
+  { id: "02", label: "The Bottleneck" },
+  { id: "03", label: "Matrix Core" },
+  { id: "04", label: "Collector" },
+  { id: "05", label: "Proof" },
+  { id: "06", label: "Initialize" },
+];
+
+// ─── Split text utility ───────────────────────────────────────────────────────
+function SplitText({ text, className = "", delay = 0, stagger = 0.04, inView = false }: {
+  text: string; className?: string; delay?: number; stagger?: number; inView?: boolean;
+}) {
+  const words = text.split(" ");
+  return (
+    <span className={className}>
+      {words.map((word, wi) => (
+        <span key={wi} style={{ display: "inline-block", overflow: "hidden", marginRight: "0.25em" }}>
+          <motion.span
+            style={{ display: "inline-block" }}
+            initial={{ y: "110%" }}
+            animate={inView ? { y: "0%" } : { y: "110%" }}
+            transition={{ duration: 1.1, ease: [0.16, 1, 0.3, 1], delay: delay + wi * stagger }}
+          >
+            {word}
+          </motion.span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// ─── Liquid cursor ────────────────────────────────────────────────────────────
+function LiquidCursor({ darkMode }: { darkMode: boolean }) {
+  const dot  = useRef<HTMLDivElement>(null);
+  const ring = useRef<HTMLDivElement>(null);
+  const pos  = useRef({ x: 0, y: 0 });
+  const lag  = useRef({ x: 0, y: 0 });
+  const hov  = useRef(false);
 
   useEffect(() => {
-    const updateMousePosition = (e: MouseEvent) => {
-      setMousePosition({ x: e.clientX, y: e.clientY });
-      const target = e.target as HTMLElement;
-      setIsHovering(
-        !!(target.closest("button") ||
-          target.closest("a") ||
-          target.closest(".group") ||
-          target.closest('[role="slider"]') ||
-          window.getComputedStyle(target).cursor === "pointer")
-      );
+    let raf: number;
+    const onMove = (e: MouseEvent) => {
+      pos.current = { x: e.clientX, y: e.clientY };
+      const t = e.target as HTMLElement;
+      hov.current = !!(t.closest("button") || t.closest("a") || t.closest("[data-cursor]"));
     };
-    window.addEventListener("mousemove", updateMousePosition);
-    return () => window.removeEventListener("mousemove", updateMousePosition);
+    const tick = () => {
+      lag.current.x += (pos.current.x - lag.current.x) * 0.1;
+      lag.current.y += (pos.current.y - lag.current.y) * 0.1;
+      if (dot.current)
+        dot.current.style.transform = `translate(${pos.current.x - 3}px,${pos.current.y - 3}px)`;
+      if (ring.current)
+        ring.current.style.transform = `translate(${lag.current.x - 18}px,${lag.current.y - 18}px) scale(${hov.current ? 2.4 : 1})`;
+      raf = requestAnimationFrame(tick);
+    };
+    window.addEventListener("mousemove", onMove);
+    raf = requestAnimationFrame(tick);
+    return () => { window.removeEventListener("mousemove", onMove); cancelAnimationFrame(raf); };
   }, []);
 
+  const c = darkMode ? "#ffffff" : "#111111";
   return (
     <>
-      <motion.div
-        className="fixed top-0 left-0 w-2 h-2 rounded-full bg-[#0055ff] pointer-events-none z-[100]"
-        animate={{ x: mousePosition.x - 4, y: mousePosition.y - 4, scale: isHovering ? 0 : 1 }}
-        transition={{ type: "tween", ease: "backOut", duration: 0.1 }}
-      />
-      <motion.div
-        className="fixed top-0 left-0 w-10 h-10 rounded-full border border-[#0055ff]/30 pointer-events-none z-[99] backdrop-blur-[1px]"
-        animate={{
-          x: mousePosition.x - 20,
-          y: mousePosition.y - 20,
-          scale: isHovering ? 2.5 : 1,
-          backgroundColor: isHovering ? "rgba(0,85,255,0.05)" : "rgba(0,0,0,0)",
-        }}
-        transition={{ type: "spring", damping: 20, stiffness: 200, mass: 0.5 }}
-      />
+      <div ref={dot} className="fixed top-0 left-0 w-[6px] h-[6px] rounded-full pointer-events-none z-[9999]"
+        style={{ background: c, transition: "background 0.4s" }} />
+      <div ref={ring} className="fixed top-0 left-0 w-9 h-9 rounded-full border pointer-events-none z-[9998]"
+        style={{ borderColor: `${c}40`, transition: "background 0.4s, border-color 0.4s, transform 0.15s cubic-bezier(0.16,1,0.3,1)" }} />
     </>
   );
 }
 
-// ─── Fade In on Scroll ────────────────────────────────────────────────────────
-function FadeIn({
-  children,
-  delay = 0,
-  className = "",
-  direction = "up",
-}: {
-  children: React.ReactNode;
-  delay?: number;
-  className?: string;
-  direction?: "up" | "left" | "right";
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const { scrollYProgress } = useScroll({ target: ref, offset: ["start end", "end start"] });
-  const parallaxY = useTransform(scrollYProgress, [0, 1], [0, direction === "up" ? -60 : -20]);
+// ─── Loading screen ───────────────────────────────────────────────────────────
+function Loader({ onDone }: { onDone: () => void }) {
+  const [pct, setPct] = useState(0);
+  const [exit, setExit] = useState(false);
+
+  useEffect(() => {
+    let v = 0;
+    const id = setInterval(() => {
+      v += Math.random() * 15 + 3;
+      if (v >= 100) {
+        v = 100; clearInterval(id);
+        setTimeout(() => { setExit(true); setTimeout(onDone, 800); }, 500);
+      }
+      setPct(Math.floor(v));
+    }, 80);
+    return () => clearInterval(id);
+  }, [onDone]);
 
   return (
-    <motion.div ref={ref} style={{ y: parallaxY }} className={className}>
-      <motion.div
-        initial={{ opacity: 0, y: direction === "up" ? 60 : 0, x: direction === "left" ? 60 : direction === "right" ? -60 : 0 }}
-        whileInView={{ opacity: 1, y: 0, x: 0 }}
-        viewport={{ once: true, margin: "-10%" }}
-        transition={{ duration: 1.4, ease: [0.16, 1, 0.3, 1], delay }}
-      >
-        {children}
-      </motion.div>
-    </motion.div>
-  );
-}
-
-// ─── Section wrapper ──────────────────────────────────────────────────────────
-// Using padding-based layout instead of sticky to avoid overlap bugs
-function Section({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return (
-    <section className={`min-h-[100svh] w-full flex flex-col justify-center relative z-10 py-24 md:py-32 ${className}`}>
-      {children}
-    </section>
-  );
-}
-
-// ─── Spec Card ────────────────────────────────────────────────────────────────
-function HoverCard({ title, icon: Icon, description, stat }: { title: string; icon: any; description: string; stat: string }) {
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-  const cardRef = useRef<HTMLDivElement>(null);
-  const x = useMotionValue(0);
-  const y = useMotionValue(0);
-
-  const rotateX = useTransform(y, [-150, 150], [5, -5]);
-  const rotateY = useTransform(x, [-150, 150], [-5, 5]);
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!cardRef.current) return;
-    const rect = cardRef.current.getBoundingClientRect();
-    const ex = e.clientX - rect.left;
-    const ey = e.clientY - rect.top;
-    setMousePos({ x: ex, y: ey });
-    x.set(ex - rect.width / 2);
-    y.set(ey - rect.height / 2);
-  };
-  
-  const handleMouseLeave = () => {
-    x.set(0);
-    y.set(0);
-  }
-
-  return (
-    <motion.div
-      ref={cardRef}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={handleMouseLeave}
-      style={{ rotateX, rotateY, transformPerspective: 1000 }}
-      className="group relative border border-black/5 bg-white/60 rounded-[2rem] p-8 md:p-10 overflow-hidden cursor-default backdrop-blur-sm transition-transform duration-300 ease-out"
-    >
-      <div
-        className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none"
-        style={{ background: `radial-gradient(600px circle at ${mousePos.x}px ${mousePos.y}px, rgba(0,85,255,0.04), transparent 40%)` }}
-      />
-      <div className="relative z-10 h-full flex flex-col justify-between min-h-[220px]">
-        <div>
-          <Icon className="w-8 h-8 text-neutral-400 group-hover:text-[#0055ff] transition-colors duration-500 mb-8" />
-          <h3 className="text-2xl font-display font-medium text-neutral-600 group-hover:text-black transition-colors duration-500 tracking-tight">{title}</h3>
-        </div>
-        <div className="overflow-hidden mt-8">
-          <div className="transform translate-y-8 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]">
-            <p className="text-base text-neutral-500 leading-relaxed font-light mb-6">{description}</p>
-            <div className="flex items-center gap-4">
-              <span className="text-xs uppercase tracking-widest text-[#0055ff]">Impact</span>
-              <span className="text-3xl font-display font-light text-black">{stat}</span>
-            </div>
+    <AnimatePresence>
+      {!exit && (
+        <motion.div
+          exit={{ opacity: 0, scale: 1.06 }}
+          transition={{ duration: 0.8, ease: [0.76, 0, 0.24, 1] }}
+          className="fixed inset-0 z-[500] bg-white flex flex-col items-center justify-center"
+        >
+          <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+            className="font-display text-black tracking-[0.6em] text-sm mb-14 select-none">
+            PURLINA MATRIX
+          </motion.div>
+          <div className="w-44 h-[1px] bg-black/10 relative overflow-hidden mb-5">
+            <motion.div className="absolute inset-y-0 left-0 bg-black"
+              animate={{ width: `${pct}%` }} transition={{ duration: 0.08 }} />
           </div>
-        </div>
-      </div>
-    </motion.div>
+          <p className="font-sans text-black/30 text-[10px] tracking-[0.4em] uppercase">
+            Initializing — {pct}%
+          </p>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
-// ─── X-Series Comparison ──────────────────────────────────────────────────────
-function XSeriesTable() {
-  const rows = [
-    { label: "Color (ASTM)", x1: "L0.5", x2: "L0.5", x3: "L0.5" },
-    { label: "Density @ 15°C (g/cm³)", x1: "0.837", x2: "0.809", x3: "0.819" },
-    { label: "Kinematic Viscosity @ 40°C (mm²/s)", x1: "34.8", x2: "9.19", x3: "19.7" },
-    { label: "Flash Point (°C)", x1: "254", x2: "196", x3: "248" },
-    { label: "Auto-Ignition Point (°C)", x1: "402", x2: "336", x3: "387" },
-    { label: "Acid Number (mgKOH/g)", x1: "0.01", x2: "0.01", x3: "0.01" },
-    { label: "Volume Resistivity @ 25°C (TΩ·m)", x1: ">1", x2: ">1", x3: ">1" },
-  ];
-
+// ─── Progress dots ────────────────────────────────────────────────────────────
+function SceneNav({ current, total, dark }: { current: number; total: number; dark: boolean }) {
   return (
-    <div className="w-full overflow-x-auto mt-12 group/table">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-black/10">
-            <th className="text-left py-4 pr-6 text-[10px] uppercase tracking-widest text-neutral-400 font-medium w-1/2">Parameter</th>
-            {["X1", "X2", "X3"].map((x) => (
-              <th key={x} className="py-4 px-4 text-center">
-                <span className="text-2xl font-display font-light text-neutral-900">{x}</span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={i} className="border-b border-black/5 group-hover/table:opacity-40 hover:!opacity-100 hover:bg-black/[0.02] transition-colors relative z-10 transition-opacity">
-              <td className="py-4 pr-6 text-neutral-500 text-xs leading-relaxed font-light">{row.label}</td>
-              <td className="py-4 px-4 text-center text-neutral-900 font-display font-light text-sm transition-colors">{row.x1}</td>
-              <td className="py-4 px-4 text-center text-neutral-900 font-display font-light text-sm transition-colors">{row.x2}</td>
-              <td className="py-4 px-4 text-center text-neutral-900 font-display font-light text-sm transition-colors">{row.x3}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="text-[10px] text-neutral-400 mt-4 font-light">Typical properties subject to change without notice. (March 2026)</p>
+    <div className="fixed right-8 top-1/2 -translate-y-1/2 z-50 flex flex-col gap-3">
+      {Array.from({ length: total }).map((_, i) => (
+        <motion.div key={i}
+          animate={{ scale: i === current ? 1.6 : 1, opacity: i === current ? 1 : 0.3 }}
+          transition={{ duration: 0.4 }}
+          className="w-[5px] h-[5px] rounded-full"
+          style={{ background: dark ? "#fff" : "#111" }}
+        />
+      ))}
     </div>
   );
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
+// ─── Scene panels ─────────────────────────────────────────────────────────────
+// Each scene: pinned, fills viewport, text choreographed
+function SceneHero({ visible, dark }: { visible: boolean; dark: boolean }) {
+  const c = dark ? "text-white" : "text-black";
+  const cs = dark ? "text-white/40" : "text-black/35";
+  return (
+    <div className="relative w-full h-full flex flex-col items-center justify-center px-8 text-center">
+      <div className="scene-num" style={{ color: dark ? "#fff" : "#000" }}>01</div>
+      <div className={`font-sans text-[10px] tracking-[0.5em] uppercase mb-10 overflow-hidden ${cs}`}>
+        <motion.span style={{ display: "block" }}
+          initial={{ y: "120%" }} animate={visible ? { y: "0%" } : { y: "120%" }}
+          transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}>
+          Invisible Infrastructure Layer
+        </motion.span>
+      </div>
+      <h1 className={`font-display leading-[0.88] tracking-tight mb-10 ${c}`}
+        style={{ fontSize: "clamp(4rem, 14vw, 13rem)" }}>
+        <SplitText text="PURLINA" inView={visible} delay={0.2} stagger={0.06} />
+        <br />
+        <SplitText text="MATRIX" inView={visible} delay={0.5} stagger={0.06} className="opacity-40" />
+      </h1>
+      <div className={`font-sans font-light text-base md:text-lg max-w-md leading-relaxed overflow-hidden ${cs}`}>
+        <motion.span style={{ display: "block" }}
+          initial={{ y: "100%" }} animate={visible ? { y: "0%" } : { y: "100%" }}
+          transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.8 }}>
+          The platform layer invisible to the eye, essential to industry.
+        </motion.span>
+      </div>
+      <motion.div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex flex-col items-center gap-3"
+        initial={{ opacity: 0 }} animate={visible ? { opacity: 1 } : { opacity: 0 }}
+        transition={{ delay: 1.4, duration: 1 }}>
+        <motion.div animate={{ y: [0, 9, 0] }} transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+          className="flex flex-col items-center gap-2">
+          <span className={`font-sans text-[9px] uppercase tracking-[0.5em] ${cs}`}
+            style={{ writingMode: "vertical-rl" }}>Scroll</span>
+          <div className={`w-[1px] h-10 bg-gradient-to-b ${dark ? "from-white/30" : "from-black/30"} to-transparent`} />
+        </motion.div>
+      </motion.div>
+    </div>
+  );
+}
+
+function SceneProblem({ visible, dark }: { visible: boolean; dark: boolean }) {
+  const c  = dark ? "text-white"    : "text-black";
+  const cs = dark ? "text-white/40" : "text-black/40";
+  const cb = dark ? "border-white/8" : "border-black/8";
+  const bg = dark ? "bg-white/5"    : "bg-black/3";
+
+  return (
+    <div className="relative w-full h-full flex items-center px-8 md:px-16 lg:px-24">
+      <div className="scene-num" style={{ color: dark ? "#fff" : "#000" }}>02</div>
+      <div className="max-w-xl ml-auto">
+        <div className={`font-sans text-[10px] tracking-[0.5em] uppercase mb-8 overflow-hidden ${cs}`}>
+          <motion.span style={{ display: "block" }}
+            initial={{ y: "120%" }} animate={visible ? { y: "0%" } : { y: "120%" }}
+            transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>
+            The Bottleneck
+          </motion.span>
+        </div>
+        <h2 className={`font-display leading-[0.9] mb-10 ${c}`}
+          style={{ fontSize: "clamp(2.8rem, 7vw, 6.5rem)" }}>
+          <SplitText text="THE WORLD" inView={visible} delay={0.1} stagger={0.05} />
+          <br />
+          <SplitText text="IS CHANGING." inView={visible} delay={0.3} stagger={0.05} className="opacity-40" />
+        </h2>
+        <div className="grid grid-cols-1 gap-4">
+          {[
+            { num: "180 ZB", label: "Data generated by 2025", sub: "AI infrastructure heat output is reaching megawatt scale. Conventional cooling has hit its ceiling." },
+            { num: "20% /yr", label: "Data center growth", sub: "Every rack, every GPU, every AI workload demands a new thermal architecture." },
+            { num: "900+", label: "Industrial sectors affected", sub: "Hydrophobic pollutants silently contaminate water across every major industry." },
+          ].map((s, i) => (
+            <motion.div key={i}
+              initial={{ opacity: 0, x: 40 }} animate={visible ? { opacity: 1, x: 0 } : { opacity: 0, x: 40 }}
+              transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.4 + i * 0.15 }}
+              className={`flex gap-6 items-start border rounded-2xl px-6 py-5 ${cb} ${bg}`}
+              data-cursor>
+              <div className={`font-display text-3xl shrink-0 ${c}`}>{s.num}</div>
+              <div>
+                <div className={`font-sans text-[10px] uppercase tracking-widest mb-1.5 ${cs}`}>{s.label}</div>
+                <div className={`font-sans font-light text-xs leading-relaxed ${cs}`}>{s.sub}</div>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SceneMatrix({ visible, dark }: { visible: boolean; dark: boolean }) {
+  const c  = dark ? "text-white"    : "text-black";
+  const cs = dark ? "text-white/40" : "text-black/40";
+  const cb = dark ? "border-white/8" : "border-black/8";
+  const bg = dark ? "bg-white/5"    : "bg-black/3";
+
+  return (
+    <div className="relative w-full h-full flex items-center px-8 md:px-16 lg:px-24">
+      <div className="scene-num" style={{ color: dark ? "#fff" : "#000" }}>03</div>
+      <div className="max-w-2xl">
+        <div className={`font-sans text-[10px] tracking-[0.5em] uppercase mb-8 overflow-hidden ${cs}`}>
+          <motion.span style={{ display: "block" }}
+            initial={{ y: "120%" }} animate={visible ? { y: "0%" } : { y: "120%" }}
+            transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>
+            Thermal Resolution
+          </motion.span>
+        </div>
+        <h2 className={`font-display leading-[0.9] mb-10 ${c}`}
+          style={{ fontSize: "clamp(2.8rem, 7vw, 6.5rem)" }}>
+          <SplitText text="PURLINA" inView={visible} delay={0.1} stagger={0.05} />
+          <br />
+          <SplitText text="MATRIX" inView={visible} delay={0.25} stagger={0.05} />
+          <br />
+          <SplitText text="CORE" inView={visible} delay={0.4} stagger={0.05} className="opacity-40" />
+        </h2>
+
+        <motion.p initial={{ opacity: 0, y: 20 }} animate={visible ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
+          transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.6 }}
+          className={`font-sans font-light text-base leading-relaxed mb-10 max-w-lg ${cs}`}>
+          Single-phase dielectric immersion fluid. Not just cooling — a stable environment for AI infrastructure evolution.
+        </motion.p>
+
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { val: ">35 kV", label: "Dielectric Breakdown" },
+            { val: "240°C", label: "Flash Point" },
+            { val: ">10¹²", label: "Resistivity Ω·m" },
+            { val: "X1", label: "Max Fluidity" },
+            { val: "X2", label: "Balanced Load" },
+            { val: "X3", label: "24/7 AI" },
+          ].map((s, i) => (
+            <motion.div key={i}
+              initial={{ opacity: 0, scale: 0.9 }} animate={visible ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.9 }}
+              transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1], delay: 0.7 + i * 0.08 }}
+              className={`border rounded-xl p-4 text-center ${cb} ${bg} hover:border-opacity-40 transition-all`}
+              data-cursor>
+              <div className={`font-display text-xl mb-1 ${c}`}>{s.val}</div>
+              <div className={`font-sans text-[9px] uppercase tracking-widest ${cs}`}>{s.label}</div>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SceneCollector({ visible, dark }: { visible: boolean; dark: boolean }) {
+  const c  = dark ? "text-white"    : "text-black";
+  const cs = dark ? "text-white/40" : "text-black/40";
+  const cb = dark ? "border-white/10" : "border-black/8";
+
+  return (
+    <div className="relative w-full h-full flex items-center justify-end px-8 md:px-16 lg:px-24">
+      <div className="scene-num" style={{ color: dark ? "#fff" : "#000" }}>04</div>
+      <div className="max-w-lg">
+        <div className={`font-sans text-[10px] tracking-[0.5em] uppercase mb-8 overflow-hidden ${cs}`}>
+          <motion.span style={{ display: "block" }}
+            initial={{ y: "120%" }} animate={visible ? { y: "0%" } : { y: "120%" }}
+            transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>
+            Hydrophobic Collector
+          </motion.span>
+        </div>
+        <h2 className={`font-display leading-[0.9] mb-8 ${c}`}
+          style={{ fontSize: "clamp(2.8rem, 7vw, 6.5rem)" }}>
+          <SplitText text="KIRLETICI" inView={visible} delay={0.1} stagger={0.05} />
+          <br />
+          <SplitText text="FAZINDA" inView={visible} delay={0.3} stagger={0.05} />
+          <br />
+          <SplitText text="TOPLANIR." inView={visible} delay={0.5} stagger={0.05} className="opacity-40" />
+        </h2>
+
+        <motion.p initial={{ opacity: 0, y: 20 }} animate={visible ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
+          transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.7 }}
+          className={`font-sans font-light text-sm leading-relaxed mb-10 ${cs}`}>
+          Hydrophobic organic pollutants in rivers, dams, and wastewater are physically captured into the Purlina phase. No emulsion. No VOCs. No water reaction.
+        </motion.p>
+
+        <div className="space-y-4">
+          {[
+            { label: "Suya Karışmaz",            desc: "Insoluble in water, no reaction" },
+            { label: "Emülsiyon Oluşturmaz",      desc: "Zero emulsion formation" },
+            { label: "VOC İçermez",               desc: "Aromatic-free, sulfur-free" },
+            { label: "İnert, Yüksek Saflıklı",   desc: "Stable structure, high purity" },
+          ].map((item, i) => (
+            <motion.div key={i}
+              initial={{ opacity: 0, x: -30 }} animate={visible ? { opacity: 1, x: 0 } : { opacity: 0, x: -30 }}
+              transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1], delay: 0.8 + i * 0.12 }}
+              className={`flex items-center gap-4 border-b pb-3 ${cb}`}>
+              <div className={`w-1.5 h-1.5 rounded-full shrink-0`}
+                style={{ background: "#c8860a" }} />
+              <div>
+                <div className={`font-sans font-medium text-xs tracking-wide ${c}`}>{item.label}</div>
+                <div className={`font-sans font-light text-[11px] ${cs}`}>{item.desc}</div>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SceneProof({ visible, dark }: { visible: boolean; dark: boolean }) {
+  const c  = dark ? "text-white"    : "text-black";
+  const cs = dark ? "text-white/40" : "text-black/40";
+  const cb = dark ? "border-white/8" : "border-black/8";
+  const bg = dark ? "bg-white/5"    : "bg-black/3";
+
+  return (
+    <div className="relative w-full h-full flex flex-col items-center justify-center px-8 text-center">
+      <div className="scene-num" style={{ color: dark ? "#fff" : "#000" }}>05</div>
+      <div className={`font-sans text-[10px] tracking-[0.5em] uppercase mb-8 overflow-hidden ${cs}`}>
+        <motion.span style={{ display: "block" }}
+          initial={{ y: "120%" }} animate={visible ? { y: "0%" } : { y: "120%" }}
+          transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>
+          Efficiency Proof
+        </motion.span>
+      </div>
+      <h2 className={`font-display leading-[0.9] mb-12 ${c}`}
+        style={{ fontSize: "clamp(3rem, 9vw, 8rem)" }}>
+        <SplitText text="THE ATLAS" inView={visible} delay={0.1} stagger={0.06} />
+      </h2>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-4xl">
+        {[
+          { val: "48%",  label: "Energy Reduction" },
+          { val: "33%",  label: "TCO Decrease" },
+          { val: "80%",  label: "Less Space" },
+          { val: "30%",  label: "CO₂ Reduction" },
+        ].map((s, i) => (
+          <motion.div key={i}
+            initial={{ opacity: 0, y: 40 }} animate={visible ? { opacity: 1, y: 0 } : { opacity: 0, y: 40 }}
+            transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.3 + i * 0.12 }}
+            className={`border rounded-2xl p-6 md:p-8 ${cb} ${bg} hover:border-opacity-50 transition-all`}
+            data-cursor>
+            <div className={`font-display mb-3 ${c}`} style={{ fontSize: "clamp(2.5rem, 6vw, 5rem)" }}>
+              {s.val}
+            </div>
+            <div className={`font-sans text-[10px] uppercase tracking-widest ${cs}`}>{s.label}</div>
+          </motion.div>
+        ))}
+      </div>
+
+      <motion.div initial={{ opacity: 0 }} animate={visible ? { opacity: 1 } : { opacity: 0 }}
+        transition={{ delay: 0.9, duration: 1 }}
+        className={`font-sans font-light text-sm max-w-md mt-10 leading-relaxed ${cs}`}>
+        vs. evaporative systems — up to 80% less water consumption, establishing a sustainable baseline for hyperscale compute.
+      </motion.div>
+    </div>
+  );
+}
+
+function SceneCTA({ visible, dark }: { visible: boolean; dark: boolean }) {
+  const c  = dark ? "text-white"    : "text-black";
+  const cs = dark ? "text-white/40" : "text-black/40";
+
+  return (
+    <div className="relative w-full h-full flex flex-col items-center justify-center px-8 text-center">
+      <div className="scene-num" style={{ color: dark ? "#fff" : "#000" }}>06</div>
+      <div className={`font-sans text-[10px] tracking-[0.5em] uppercase mb-8 overflow-hidden ${cs}`}>
+        <motion.span style={{ display: "block" }}
+          initial={{ y: "120%" }} animate={visible ? { y: "0%" } : { y: "120%" }}
+          transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1] }}>
+          By Alkim Petrokimya
+        </motion.span>
+      </div>
+      <h2 className={`font-display leading-[0.9] mb-10 ${c}`}
+        style={{ fontSize: "clamp(3rem, 10vw, 9rem)" }}>
+        <SplitText text="INITIALIZE" inView={visible} delay={0.1} stagger={0.05} />
+        <br />
+        <SplitText text="MATRIX" inView={visible} delay={0.35} stagger={0.05} className="opacity-40" />
+      </h2>
+
+      {/* Search CTA */}
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={visible ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
+        transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.7 }}
+        className="relative w-full max-w-md mb-8">
+        <input type="text" placeholder="Enter your sector..."
+          className={`w-full rounded-full px-7 py-4 pr-16 font-sans text-sm outline-none transition-all duration-400 ${dark ? "bg-white/8 border border-white/15 text-white placeholder:text-white/25 focus:border-white/35" : "bg-black/5 border border-black/10 text-black placeholder:text-black/30 focus:border-black/30"}`} />
+        <button className={`absolute right-2 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full flex items-center justify-center transition-colors ${dark ? "bg-white hover:bg-white/90" : "bg-black hover:bg-black/80"}`}>
+          <Search className={`w-4 h-4 ${dark ? "text-black" : "text-white"}`} />
+        </button>
+      </motion.div>
+
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={visible ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
+        transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.9 }}>
+        <Magnetic>
+          <a href="mailto:satis@alkimpetrokimya.com"
+            className={`group relative flex items-center gap-5 rounded-full pl-8 pr-3 py-3 font-sans font-medium overflow-hidden transition-all duration-500 border ${dark ? "border-white/15 text-white hover:border-white/35" : "border-black/15 text-black hover:border-black/30"}`}
+            data-cursor>
+            <span className="relative z-10 text-sm uppercase tracking-wider">Initialize Platform</span>
+            <div className={`w-10 h-10 rounded-full border flex items-center justify-center z-10 ${dark ? "border-white/15" : "border-black/15"}`}>
+              <ArrowUpRight className="w-4 h-4 group-hover:rotate-45 transition-transform duration-400" />
+            </div>
+          </a>
+        </Magnetic>
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
 export default function PlatformExperience() {
+  const [loaded,       setLoaded]       = useState(false);
+  const [activeScene,  setActiveScene]  = useState(0);
+  const [sceneVisible, setSceneVisible] = useState(false);
+  const [dark,         setDark]         = useState(false);
+
+  // R3F scene refs — no re-renders
+  const currentScene  = useRef(0);
+  const sceneProgress = useRef(0);
+
+  // One div per scene, stacked
+  const panelRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const lenisRef = useRef<Lenis | null>(null);
+
+  const onLoaded = useCallback(() => {
+    setLoaded(true);
+    setSceneVisible(true);
+  }, []);
+
   useEffect(() => {
-    // Add lenis scroll
-    const lenis = new Lenis({ lerp: 0.1, orientation: "vertical", gestureOrientation: "vertical", smoothWheel: true, wheelMultiplier: 1 });
-    function raf(time: number) { lenis.raf(time); requestAnimationFrame(raf); }
+    const lenis = new Lenis({ lerp: 0.1, smoothWheel: true });
+    lenisRef.current = lenis;
+    const raf = (t: number) => { lenis.raf(t); requestAnimationFrame(raf); };
     requestAnimationFrame(raf);
     window.scrollTo(0, 0);
     return () => lenis.destroy();
   }, []);
 
+  // Scroll → scene detection
+  useEffect(() => {
+    if (!loaded) return;
+
+    const onScroll = () => {
+      const panels = panelRefs.current;
+      const scrollY = window.scrollY;
+      const winH = window.innerHeight;
+
+      for (let i = panels.length - 1; i >= 0; i--) {
+        const el = panels[i];
+        if (!el) continue;
+        const top = el.offsetTop;
+        if (scrollY >= top - winH * 0.4) {
+          if (activeScene !== i) {
+            setActiveScene(i);
+            setSceneVisible(false);
+            setTimeout(() => setSceneVisible(true), 60);
+          }
+          // Progress within this scene
+          const sceneH = el.offsetHeight;
+          const prog = Math.min(Math.max((scrollY - top) / sceneH, 0), 1);
+          currentScene.current = i + prog;
+          sceneProgress.current = prog;
+
+          // Dark mode: scenes 3+ are dark
+          setDark(i >= 3);
+          break;
+        }
+      }
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [loaded, activeScene]);
+
+  // BG color synced to dark state
+  const bgClass = dark ? "bg-black" : "bg-white";
+
+  const sceneComponents = [
+    <SceneHero      key={0} visible={sceneVisible && activeScene === 0} dark={dark} />,
+    <SceneProblem   key={1} visible={sceneVisible && activeScene === 1} dark={dark} />,
+    <SceneMatrix    key={2} visible={sceneVisible && activeScene === 2} dark={dark} />,
+    <SceneCollector key={3} visible={sceneVisible && activeScene === 3} dark={dark} />,
+    <SceneProof     key={4} visible={sceneVisible && activeScene === 4} dark={dark} />,
+    <SceneCTA       key={5} visible={sceneVisible && activeScene === 5} dark={dark} />,
+  ];
+
   return (
-    <div className="bg-[#f7f7fa] text-neutral-900 font-sans relative selection:bg-[#0055ff] selection:text-white overflow-x-hidden min-h-screen">
-      <CustomCursor />
+    <div ref={containerRef}
+      className={`grain relative font-sans overflow-x-hidden min-h-screen transition-colors duration-1000 ${bgClass}`}>
+      <LiquidCursor darkMode={dark} />
+      <Loader onDone={onLoaded} />
 
       {/* Navbar */}
-      <nav className="fixed top-0 w-full z-50 p-6 md:p-10 pointer-events-none">
-        <div className="max-w-7xl mx-auto flex justify-between items-center font-medium tracking-widest text-[10px] md:text-xs uppercase text-neutral-500 mix-blend-multiply">
-          <div className="font-display font-medium text-neutral-900">Purlina Matrix Core</div>
-          <div className="hidden md:block">by Alkim Petrokimya</div>
-          <div>AI Thermal Platform</div>
+      <nav className="fixed top-0 w-full z-50 px-8 md:px-14 py-7 pointer-events-none mix-blend-difference">
+        <div className="flex justify-between items-center">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: loaded ? 1 : 0 }}
+            transition={{ delay: 0.3 }}
+            className="font-display text-white tracking-[0.35em] text-sm">
+            PURLINA
+          </motion.div>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: loaded ? 1 : 0 }}
+            transition={{ delay: 0.5 }}
+            className="font-sans text-white/50 text-[10px] tracking-[0.4em] uppercase">
+            {SCENES[activeScene]?.label}
+          </motion.div>
         </div>
       </nav>
 
-      {/* Persistent 3D Background */}
+      {/* Scene nav dots */}
+      {loaded && <SceneNav current={activeScene} total={SCENES.length} dark={dark} />}
+
+      {/* 3D Canvas — fixed, full viewport */}
       <div className="fixed inset-0 z-0 pointer-events-none">
-        <Canvas camera={{ position: [0, 0, 14], fov: 40 }} dpr={[1, 1.5]} eventSource={document.body} eventPrefix="client">
-          <FluidScene />
+        <Canvas
+          camera={{ position: [0, 0, 14], fov: 42 }}
+          dpr={[1, 1.5]}
+          gl={{ powerPreference: "default", antialias: false, alpha: false }}
+          eventSource={document.body}
+          eventPrefix="client"
+        >
+          <FluidScene currentScene={currentScene} sceneProgress={sceneProgress} />
         </Canvas>
       </div>
 
-      <div className="w-full max-w-7xl mx-auto px-6 lg:px-12 pointer-events-none">
-
-        {/* ── Scene 01: Hero ── */}
-        <Section className="items-center text-center">
-          <div className="pointer-events-auto flex flex-col items-center">
-            <FadeIn delay={0.2} direction="up">
-              <p className="text-[10px] md:text-xs tracking-[0.3em] text-neutral-500 uppercase mb-8 border-b border-black/10 pb-4 inline-block font-medium">
-                Dielectric Immersion Cooling Platform
-              </p>
-            </FadeIn>
-            <FadeIn delay={0.4} direction="up">
-              <h1 className="text-5xl md:text-7xl lg:text-[8rem] font-display font-light tracking-tighter leading-[0.95] mb-10 text-neutral-900">
-                The thermal<br />
-                <span className="text-[#0055ff] italic font-serif pr-4">revolution</span>
-                <span className="text-neutral-900">shaping</span><br />
-                <span className="text-neutral-400 font-light">the future.</span>
-              </h1>
-            </FadeIn>
-            <FadeIn delay={0.6} direction="up">
-              <p className="text-xl md:text-2xl text-neutral-600 font-light leading-relaxed max-w-2xl text-center">
-                A single-phase dielectric immersion fluid for AI data centers, HPC clusters, and GPU-dense infrastructure.
-              </p>
-            </FadeIn>
-          </div>
-          <motion.div
-            className="absolute bottom-[-6vh] left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 pointer-events-none"
-            animate={{ y: [0, 10, 0], opacity: [0.2, 0.6, 0.2] }}
-            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+      {/* Scene panels — tall enough to scroll through each */}
+      <div className="relative z-10 pointer-events-none">
+        {sceneComponents.map((scene, i) => (
+          <div
+            key={i}
+            ref={el => { panelRefs.current[i] = el; }}
+            className="relative w-full pointer-events-auto"
+            style={{ height: "100vh" }}
           >
-            <div className="text-[9px] uppercase tracking-[0.4em] font-medium text-neutral-400" style={{ writingMode: "vertical-rl" }}>Scroll to Initialize</div>
-            <div className="w-[1px] h-12 bg-gradient-to-b from-neutral-400 to-transparent" />
-          </motion.div>
-        </Section>
-
-        {/* ── Scene 02: The Problem ── */}
-        <Section className="items-center justify-end">
-          <div className="pointer-events-auto max-w-xl w-full md:ml-auto">
-            <FadeIn delay={0.1} direction="left">
-              <p className="text-[10px] md:text-xs tracking-[0.3em] text-neutral-500 uppercase mb-6 border-b border-black/10 pb-4 inline-block font-medium">The Bottleneck</p>
-              <h2 className="text-3xl md:text-5xl font-display font-light mb-12 text-neutral-900">
-                The third phase<br />of digital transformation<br />
-                <span className="text-[#0055ff] italic font-serif">is thermal.</span>
-              </h2>
-            </FadeIn>
-            <div className="grid grid-cols-1 gap-6 w-full">
-              <FadeIn delay={0.3} direction="left">
-                <HoverCard
-                  title="Thermal Bottleneck"
-                  icon={Activity}
-                  description="AI clusters and LLM training infrastructures now generate megawatt-level heat. Conventional air and water cooling has reached its sustainability ceiling."
-                  stat="180 ZB"
-                />
-              </FadeIn>
-              <FadeIn delay={0.4} direction="left">
-                <HoverCard
-                  title="Data Center Growth"
-                  icon={Zap}
-                  description="Data center infrastructure grows at ~20% annually. From 5 ZB in 2010 to 180 ZB in 2025 — this growth demands a new thermal architecture."
-                  stat="~20% / yr"
-                />
-              </FadeIn>
-            </div>
+            <AnimatePresence mode="wait">
+              {activeScene === i && (
+                <motion.div key={`scene-${i}`}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.5 }}
+                  className="absolute inset-0">
+                  {scene}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
-        </Section>
-
-        {/* ── Scene 03: The Solution ── */}
-        <Section className="items-center justify-start">
-          <div className="pointer-events-auto max-w-2xl">
-            <FadeIn delay={0.1} direction="right">
-              <p className="text-[10px] md:text-xs tracking-[0.3em] text-[#0055ff] uppercase mb-6 border-b border-[#0055ff]/10 pb-4 inline-block font-medium">Thermal Resolution</p>
-              <h2 className="text-5xl md:text-6xl font-display font-light tracking-tighter leading-[1.05] mb-10 text-neutral-900">
-                Not just cooling.<br />
-                <span className="text-neutral-500 italic font-serif tracking-normal">A stable environment<br />for evolution.</span>
-              </h2>
-            </FadeIn>
-            <FadeIn delay={0.3} direction="right">
-              <p className="text-lg md:text-xl text-neutral-600 font-light leading-relaxed mb-4">
-                Purlina Matrix Core is a single-phase dielectric immersion cooling fluid for high-density computing. It doesn't merely carry heat — it stabilizes the processing environment.
-              </p>
-              <p className="text-base text-neutral-500 font-light leading-relaxed mb-12">
-                Ultra-refined, aromatic-free, saturated hydrocarbon base. Electrically and chemically passive. Does not react, does not create conductivity, leaves no residue.
-              </p>
-            </FadeIn>
-
-            {/* Key specs inline */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
-              {[
-                { val: ">35 kV", label: "Dielectric Breakdown" },
-                { val: ">10¹² Ω·m", label: "Electrical Resistivity" },
-                { val: "<0.01", label: "Acid Number (mgKOH/g)" },
-                { val: "~2.0 kJ/kgK", label: "Specific Heat Capacity" },
-                { val: "~0.13 W/mK", label: "Thermal Conductivity" },
-                { val: "240–265°C", label: "Flash Point" },
-              ].map((s, i) => (
-                <FadeIn key={i} delay={0.35 + i * 0.05} direction="up">
-                  <div className="border border-black/5 p-5 rounded-2xl bg-white/60 backdrop-blur-md hover:bg-white hover:border-[#0055ff]/20 transition-all group">
-                    <div className="text-lg font-display font-medium text-[#0055ff] mb-1">{s.val}</div>
-                    <div className="text-[10px] uppercase tracking-widest text-neutral-400 font-medium leading-tight">{s.label}</div>
-                  </div>
-                </FadeIn>
-              ))}
-            </div>
-          </div>
-        </Section>
-
-        {/* ── Scene 04: X Series ── */}
-        <Section className="items-center justify-end">
-          <div className="w-full md:w-[60%] pointer-events-auto md:ml-auto">
-            <FadeIn delay={0.1} direction="left">
-              <p className="text-[10px] md:text-xs tracking-[0.3em] text-[#0055ff] uppercase mb-6 border-b border-[#0055ff]/10 pb-4 inline-block font-medium">Product Series</p>
-            </FadeIn>
-            <FadeIn delay={0.2} direction="left">
-              <h2 className="text-4xl md:text-6xl font-display font-light text-neutral-900 mb-8 tracking-tight">
-                Three viscosity grades.<br />
-                <span className="text-neutral-500 italic font-serif">One architecture.</span>
-              </h2>
-            </FadeIn>
-            <FadeIn delay={0.3} direction="left">
-              <p className="text-lg text-neutral-600 font-light leading-relaxed mb-8 max-w-xl">
-                The X Series covers every thermal load profile — from maximum-fluidity GPU clusters to continuous 24/7 AI workloads under sustained thermal stress.
-              </p>
-            </FadeIn>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-              {[
-                { id: "X1", desc: "Maximum fluidity for GPU-dense systems. Highest heat transfer rate.", badge: "GPU Optimized" },
-                { id: "X2", desc: "Balanced performance between heat transfer and service life.", badge: "Balanced" },
-                { id: "X3", desc: "Built for 24/7 AI infrastructure under sustained thermal stress.", badge: "24/7 AI" },
-              ].map((x, i) => (
-                <FadeIn key={i} delay={0.4 + i * 0.1} direction="up">
-                  <div className="border border-black/5 p-6 rounded-2xl bg-white/60 backdrop-blur-md hover:bg-white hover:border-[#0055ff]/20 transition-all group cursor-default h-full">
-                    <div className="flex justify-between items-start mb-4">
-                      <span className="text-4xl font-display font-light text-neutral-900 group-hover:text-[#0055ff] transition-colors">{x.id}</span>
-                      <span className="text-[9px] uppercase tracking-widest text-[#0055ff] bg-[#0055ff]/5 px-2 py-1 rounded-full font-medium">{x.badge}</span>
-                    </div>
-                    <p className="text-neutral-500 text-xs leading-relaxed">{x.desc}</p>
-                  </div>
-                </FadeIn>
-              ))}
-            </div>
-
-            <FadeIn delay={0.7} direction="left">
-              <XSeriesTable />
-            </FadeIn>
-          </div>
-        </Section>
-
-        {/* ── Scene 05: Efficiency Numbers ── */}
-        <Section className="items-center justify-center">
-          <div className="w-full max-w-6xl pointer-events-auto">
-            <FadeIn delay={0.1} direction="up">
-              <div className="flex justify-center w-full">
-                <p className="text-[10px] md:text-xs tracking-[0.3em] text-neutral-900 uppercase mb-6 border-b border-black/20 pb-4 inline-block font-medium text-center">The Atlas</p>
-              </div>
-              <h2 className="text-4xl md:text-6xl font-display font-light text-center text-neutral-900 mb-16 tracking-tight">
-                Efficiency Proof
-              </h2>
-            </FadeIn>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-12">
-              {[
-                { val: "48%", label: "Energy Reduction" },
-                { val: "33%", label: "TCO Decrease" },
-                { val: "30%", label: "CO₂ Reduction" },
-                { val: "80%", label: "Less Space" },
-              ].map((s, i) => (
-                <FadeIn key={i} delay={0.2 + i * 0.1} direction="up" className="h-full">
-                  <div className="h-full border border-black/5 p-8 rounded-3xl bg-white/60 backdrop-blur-md flex flex-col items-center justify-center text-center group hover:bg-white transition-all duration-500 hover:border-[#0055ff]/20 px-4">
-                    <div className="text-5xl md:text-6xl font-display font-light text-neutral-900 mb-6 group-hover:scale-110 group-hover:text-[#0055ff] transition-all duration-500 tracking-tighter">{s.val}</div>
-                    <div className="text-[10px] sm:text-xs uppercase tracking-widest text-neutral-500 font-medium">{s.label}</div>
-                  </div>
-                </FadeIn>
-              ))}
-            </div>
-
-            {/* Pure vs AO */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <FadeIn delay={0.6} direction="left" className="h-full">
-                <div className="h-full border border-black/5 p-8 rounded-3xl bg-white/60 backdrop-blur-md hover:bg-white/90 transition-colors">
-                  <div className="flex items-center gap-3 mb-4">
-                    <Shield className="w-5 h-5 text-neutral-400" />
-                    <span className="text-xs uppercase tracking-widest text-neutral-500 font-medium">Pure Version</span>
-                  </div>
-                  <p className="text-neutral-600 text-sm font-light leading-relaxed">Additive-free formulation based on molecular transparency. Ideal for medium loads and short-duration operations.</p>
-                </div>
-              </FadeIn>
-              <FadeIn delay={0.7} direction="right" className="h-full">
-                <div className="h-full border border-[#0055ff]/10 p-8 rounded-3xl bg-white/80 backdrop-blur-md hover:bg-white transition-colors">
-                  <div className="flex items-center gap-3 mb-4">
-                    <Layers className="w-5 h-5 text-[#0055ff]" />
-                    <span className="text-xs uppercase tracking-widest text-[#0055ff] font-medium">AO Enhanced Version</span>
-                  </div>
-                  <p className="text-neutral-600 text-sm font-light leading-relaxed">Phenolic, aminic, or phosphite-based antioxidant systems. Suppresses oxidative chain reactions under continuous thermal cycling. Prevents viscosity change and deposit formation.</p>
-                </div>
-              </FadeIn>
-            </div>
-
-            <FadeIn delay={0.8} direction="up">
-              <p className="text-center text-neutral-500 mt-12 text-sm max-w-2xl mx-auto font-light leading-relaxed">
-                Compared to evaporative systems, water consumption can be reduced by up to 80% — establishing a radically sustainable baseline for hyperscale compute.
-              </p>
-            </FadeIn>
-          </div>
-        </Section>
-
-        {/* ── Scene 06: Company + CTA ── */}
-        <Section className="items-center justify-center text-center pb-0">
-          <div className="pointer-events-auto flex flex-col items-center w-full max-w-5xl mx-auto">
-            <FadeIn delay={0.1} direction="up">
-              <p className="text-[10px] md:text-xs tracking-[0.3em] text-[#0055ff] uppercase mb-8 border-b border-[#0055ff]/10 pb-4 inline-block font-medium">By Alkim Petrokimya</p>
-            </FadeIn>
-            <FadeIn delay={0.2} direction="up">
-              <h2 className="text-5xl md:text-7xl font-display font-light text-neutral-900 mb-8 tracking-tight">
-                The stable environment<br />
-                <span className="text-[#0055ff] italic font-serif">processing the future.</span>
-              </h2>
-            </FadeIn>
-            <FadeIn delay={0.3} direction="up">
-              <p className="text-lg text-neutral-600 font-light leading-relaxed max-w-2xl mb-16">
-                Alkim Petrokimya — over 25 years in the chemical industry. 14,500 m² facilities in Istanbul Tuzla. 52,000 tons active stock. 270,000 tons/year trade volume.
-              </p>
-            </FadeIn>
-
-            {/* Company stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 w-full mb-16">
-              {[
-                { val: "52,000 T", label: "Active Stock Capacity" },
-                { val: "60+", label: "Tanker Distribution Fleet" },
-                { val: "270,000 T", label: "Annual Trade Volume" },
-                { val: "6", label: "Bonded Warehouses" },
-              ].map((s, i) => (
-                <FadeIn key={i} delay={0.4 + i * 0.1} direction="up">
-                  <div className="border border-black/5 p-6 rounded-2xl bg-white/40 backdrop-blur-md text-center hover:bg-white/80 transition-colors">
-                    <div className="text-2xl md:text-3xl font-display font-light text-[#0055ff] mb-2">{s.val}</div>
-                    <div className="text-[10px] uppercase tracking-widest text-neutral-500 font-medium leading-tight">{s.label}</div>
-                  </div>
-                </FadeIn>
-              ))}
-            </div>
-
-            <FadeIn delay={0.8} direction="up">
-              <Magnetic>
-                <a
-                  href="mailto:satis@alkimpetrokimya.com"
-                  className="group relative flex items-center justify-center gap-6 bg-black text-white pl-12 pr-4 py-4 rounded-full text-xl md:text-2xl font-display font-medium overflow-hidden transition-transform hover:scale-105 active:scale-95 shadow-xl"
-                >
-                  <span className="relative z-10 flex items-center gap-6">
-                    Initialize Platform
-                    <div className="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center text-white backdrop-blur-md border border-white/20">
-                      <ArrowUpRight className="w-6 h-6 group-hover:rotate-45 transition-transform duration-300" />
-                    </div>
-                  </span>
-                  <div className="absolute inset-0 w-full h-full bg-[#0055ff] transform scale-x-0 origin-left group-hover:scale-x-100 transition-transform duration-500 ease-out" />
-                </a>
-              </Magnetic>
-            </FadeIn>
-          </div>
-        </Section>
-
+        ))}
       </div>
 
       {/* Footer */}
-      <footer className="relative z-10 border-t border-black/5 bg-white/30 backdrop-blur-md mt-24 px-6 lg:px-12 py-12 pointer-events-auto">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between gap-8">
-          <div>
-            <div className="font-display font-medium text-neutral-900 mb-1">Purlina Matrix Core</div>
-            <div className="text-xs text-neutral-400 font-light">ALKİM Petrokimya San. ve Tic. A.Ş.</div>
-            <div className="text-xs text-neutral-400 font-light mt-1">Kimya Sanayicileri OSB, Aromatik Cd. No:61<br />34956 Aydınlı-KOSB / Tuzla / İstanbul</div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <a href="tel:+902165932461" className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors font-light">+90 (216) 593 24 61</a>
-            <a href="tel:+905443959166" className="text-xs text-neutral-500 hover:text-neutral-900 transition-colors font-light">+90 (544) 395 91 66</a>
-            <a href="mailto:info@alkimpetrokimya.com" className="text-xs text-neutral-500 hover:text-[#0055ff] transition-colors font-light">info@alkimpetrokimya.com</a>
-            <a href="mailto:satis@alkimpetrokimya.com" className="text-xs text-neutral-500 hover:text-[#0055ff] transition-colors font-light">satis@alkimpetrokimya.com</a>
-          </div>
-          <div className="text-xs text-neutral-400 font-light self-end">
-            © 2026 Alkim Petrokimya
-          </div>
+      <footer className={`relative z-10 border-t px-8 lg:px-14 py-10 pointer-events-auto transition-colors duration-1000 ${dark ? "border-white/8 bg-black text-white/30" : "border-black/8 bg-white text-black/30"}`}>
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between gap-4 items-center">
+          <div className="font-display tracking-[0.3em] text-sm" style={{ color: dark ? "#fff" : "#111" }}>PURLINA MATRIX</div>
+          <div className="font-sans text-xs tracking-widest uppercase">© 2026 Alkim Petrokimya</div>
+          <div className="font-sans text-xs">Tuzla, İstanbul</div>
         </div>
       </footer>
     </div>
